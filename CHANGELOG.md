@@ -2,6 +2,9 @@
 
 All changes we make to the assignment code or PDF will be documented in this file.
 
+## [26.1.1] - 2026-04-20
+- handout: Remove H100-specific references in favor of B200 use and TMA description
+
 ## [26.1.0] - 2026-04-16
 - handout: clean up language, fix a few inconsistencies
 - handout: fix triton code compile issue
