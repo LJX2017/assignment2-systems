@@ -2,6 +2,9 @@
 
 All changes we make to the assignment code or PDF will be documented in this file.
 
+## [26.1.4] - 2026-05-01
+- code: sharded model tests use tensors with even leading dimensions, allowing alternate solutions
+
 ## [26.1.3] - 2026-04-28
 - writeup: write proper FA3-style backward pass with two passes, one for dK, dV, and a separate for dQ
 - writeup: enforce consistency in backward and forward algorithm notation

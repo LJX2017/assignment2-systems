@@ -172,7 +172,7 @@ requires-dist = [
 
 [[package]]
 name = "cs336-systems"
-version = "26.1.1"
+version = "26.1.4"
 source = { editable = "." }
 dependencies = [
     { name = "cs336-basics" },
