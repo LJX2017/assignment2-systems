@@ -26,9 +26,6 @@ def resolve_device(device_name: str) -> str:
     return device_name
 
 
-device = None
-
-
 def random_batch_generator(batch_size: int, context_length: int, vocab_size: int, device: str) -> Generator:
     rand_array = np.random.randint(low=0, high=vocab_size - 1, size=2 * context_length)
     while True:
@@ -38,7 +35,7 @@ def random_batch_generator(batch_size: int, context_length: int, vocab_size: int
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train a language model")
     parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto", help="Training device")
-    parser.add_argument("--iterations", type=int, default=1000, help="Number of training steps")
+    # parser.add_argument("--iterations", type=int, default=1000, help="Number of training steps")
     parser.add_argument("--sequence-len", type=int, default=512, help="Sequence length")
     parser.add_argument("--vocab-size", type=int, default=10000, help="Vocabulary size")
     parser.add_argument("--n-layer", type=int, default=12, help="Number of transformer layers")
@@ -58,7 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def sync_cpu_gpu():
+def sync_cpu_gpu(device):
     if device == "cuda":
         torch.cuda.synchronize()
     elif device == "mps":
@@ -67,31 +64,31 @@ def sync_cpu_gpu():
         torch.cpu.synchronize()
 
 
-def forward_only(model: BasicsTransformerLM, input):
-    sync_cpu_gpu()
-    result = model(input)
-    sync_cpu_gpu()
+def forward_only(model: BasicsTransformerLM, input, device):
+    sync_cpu_gpu(device)
+    model(input)
+    sync_cpu_gpu(device)
     return
 
 
-def forward_and_backward(model: BasicsTransformerLM, input, output):
-    sync_cpu_gpu()
+def forward_and_backward(model: BasicsTransformerLM, input, output, device):
+    sync_cpu_gpu(device)
     logits = model(input)
     loss = cross_entropy(logits.reshape(-1, logits.size(-1)), output.reshape(-1))
     loss.backward()
     model.zero_grad()
-    sync_cpu_gpu()
+    sync_cpu_gpu(device)
     return
 
 
-def forward_and_backward_and_optimizer(model: BasicsTransformerLM, input, output, optimizer: AdamW):
-    sync_cpu_gpu()
+def forward_and_backward_and_optimizer(model: BasicsTransformerLM, input, output, optimizer: AdamW, device):
+    sync_cpu_gpu(device)
     logits = model(input)
     optimizer.zero_grad()
     loss = cross_entropy(logits.reshape(-1, logits.size(-1)), output.reshape(-1))
     loss.backward()
     optimizer.step()
-    sync_cpu_gpu()
+    sync_cpu_gpu(device)
     return
 
 
@@ -111,7 +108,6 @@ def measure_time(function: Callable, warmup, **params):
 
 def main():
     args = build_parser().parse_args()
-    global device
     device = resolve_device(args.device)
     print("Using device: ", device)
     model = BasicsTransformerLM(
@@ -130,7 +126,7 @@ def main():
         eps=args.eps,
         weight_decay=args.weight_decay,
     )
-    data_generator = random_batch_generator(args.batch_size, args.sequence_len, args.vocab_size, str(device))
+    data_generator = random_batch_generator(args.batch_size, args.sequence_len, args.vocab_size, device)
 
     input, output = next(data_generator)
     # forward_only(model, input)
@@ -138,9 +134,11 @@ def main():
     # forward_and_backward_and_optimizer(model, input, output, optimizer)
     for i in range(args.repeat):
         input, output = next(data_generator)
-        forward_only_time = measure_time(forward_only, args.w, model=model, input=input)
-        forward_and_backward_time = measure_time(forward_and_backward, args.w, model=model, input=input, output=output)
-        forward_and_backward_and_optimizer_time = measure_time(forward_and_backward_and_optimizer, args.w, model=model, input=input, output=output, optimizer=optimizer)
+        forward_only_time = measure_time(forward_only, args.w, model=model, input=input, device=device)
+        forward_and_backward_time = measure_time(forward_and_backward, args.w, model=model, input=input, output=output, device=device)
+        forward_and_backward_and_optimizer_time = measure_time(
+            forward_and_backward_and_optimizer, args.w, model=model, input=input, output=output, optimizer=optimizer, device=device
+        )
 
         print("forward_only_time: ", forward_only_time)
         print("forward_and_backward_time: ", forward_and_backward_time)
