@@ -1,0 +1,8 @@
+I ran the BF16 experiment with context length 512 on your RTX 3080 Laptop GPU, using batch-size=1, w=1, repeat=1. Times are seconds per iteration from your script.
+
+Size	FP32 forward	BF16 forward	FP32 fwd+bwd	BF16 fwd+bwd
+small	0.0305	0.0368	0.0964	0.1011
+medium	0.0788	0.0794	0.2594	0.2220
+large	0.1709	0.1157	0.5768	0.3508
+xl	timed out	not completed	timed out	not completed
+10B	timed out	not completed	timed out	not completed

@@ -1,9 +1,11 @@
 import argparse
+import contextlib
 import timeit
 from collections.abc import Callable, Generator
 
 import numpy as np
 import torch
+import torch.cuda.nvtx as nvtx
 from cs336_basics.data import get_batch
 from cs336_basics.model import BasicsTransformerLM
 from cs336_basics.nn_utils import cross_entropy
@@ -43,8 +45,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--d-ff", type=int, default=2048, help="Feed-forward hidden dimension")
     parser.add_argument("--n-embd", type=int, default=768, help="Embedding dimension")
     parser.add_argument("--w", type=int, default=3, help="warm up steps")
-    parser.add_argument("--repeat", type=int, default=5, help="repeat times")
+    parser.add_argument("--repeat", type=int, default=2, help="repeat times")
     parser.add_argument("--batch-size", type=int, default=4, help="Batch size")
+    parser.add_argument("--use-mixed-precision", type=bool, default=False)
 
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
     parser.add_argument("--beta0", type=float, default=0.9, help="AdamW beta1")
@@ -83,11 +86,16 @@ def forward_and_backward(model: BasicsTransformerLM, input, output, device):
 
 def forward_and_backward_and_optimizer(model: BasicsTransformerLM, input, output, optimizer: AdamW, device):
     sync_cpu_gpu(device)
-    logits = model(input)
-    optimizer.zero_grad()
-    loss = cross_entropy(logits.reshape(-1, logits.size(-1)), output.reshape(-1))
-    loss.backward()
-    optimizer.step()
+    with nvtx.range("Forward pass"):
+        logits = model(input)
+    with nvtx.range("set 0 grad"):
+        optimizer.zero_grad()
+    with nvtx.range("compute loss"):
+        loss = cross_entropy(logits.reshape(-1, logits.size(-1)), output.reshape(-1))
+    with nvtx.range("loss backward"):
+        loss.backward()
+    with nvtx.range("optimizer step"):
+        optimizer.step()
     sync_cpu_gpu(device)
     return
 
@@ -96,11 +104,12 @@ def measure_time(function: Callable, warmup, **params):
     for it in range(warmup + 10):
         if it >= warmup:
             # run test and average the time.
-            elapsed = timeit.timeit(
-                "function(**params)",
-                number=10,
-                globals={"function": function, "params": params},
-            )
+            with nvtx.range("Measuring 10 iters"):
+                elapsed = timeit.timeit(
+                    "function(**params)",
+                    number=10,
+                    globals={"function": function, "params": params},
+                )
             return elapsed / 10
         else:
             function(**params)
@@ -134,12 +143,23 @@ def main():
     # forward_and_backward_and_optimizer(model, input, output, optimizer)
     for i in range(args.repeat):
         input, output = next(data_generator)
-        forward_only_time = measure_time(forward_only, args.w, model=model, input=input, device=device)
-        forward_and_backward_time = measure_time(forward_and_backward, args.w, model=model, input=input, output=output, device=device)
-        forward_and_backward_and_optimizer_time = measure_time(
-            forward_and_backward_and_optimizer, args.w, model=model, input=input, output=output, optimizer=optimizer, device=device
-        )
+        dtype = torch.bfloat16
+        context_manager = contextlib.nullcontext()
+        if args.use_mixed_precision:
+            context_manager = torch.autocast(device_type="cuda", dtype=dtype)
+        if i == 0:
+            torch.cuda.memory._record_memory_history(max_entries=1000000)
+        with context_manager:
+            forward_only_time = measure_time(forward_only, args.w, model=model, input=input, device=device)
+            forward_and_backward_time = measure_time(forward_and_backward, args.w, model=model, input=input, output=output, device=device)
+            forward_and_backward_and_optimizer_time = measure_time(
+                forward_and_backward_and_optimizer, args.w, model=model, input=input, output=output, optimizer=optimizer, device=device
+            )
 
+        if i == 0:
+            torch.cuda.memory._dump_snapshot("memory_snapshot.pickle")
+            # Stop recording history.
+            torch.cuda.memory._record_memory_history(enabled=None)
         print("forward_only_time: ", forward_only_time)
         print("forward_and_backward_time: ", forward_and_backward_time)
         print("forward_and_backward_and_optimizer_time: ", forward_and_backward_and_optimizer_time)

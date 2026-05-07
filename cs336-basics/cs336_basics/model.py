@@ -8,6 +8,7 @@ import warnings
 
 import einx
 import torch
+import torch.cuda.nvtx as nvtx
 import torch.nn as nn
 from einops import einsum, rearrange
 from jaxtyping import Bool, Float, Int
@@ -424,12 +425,15 @@ def scaled_dot_product_attention(
     """
 
     d_k = K.shape[-1]
-    attention_scores = einsum(Q, K, "... query d_k, ... key d_k -> ... query key") / math.sqrt(d_k)
+
+    with nvtx.range("attention Q@K.T"):
+        attention_scores = einsum(Q, K, "... query d_k, ... key d_k -> ... query key") / math.sqrt(d_k)
 
     if mask is not None:
         attention_scores = torch.where(mask, attention_scores, float("-inf"))
 
-    attention_weights = softmax(attention_scores, dim=-1)  # Softmax over the key dimension
+    with nvtx.range("attention softmax"):
+        attention_weights = softmax(attention_scores, dim=-1)  # Softmax over the key dimension
 
     return einsum(attention_weights, V, "... query key, ... key d_v ->  ... query d_v")
 
@@ -468,7 +472,6 @@ class CausalMultiHeadSelfAttention(nn.Module):
 
         self.d_k = d_model // num_heads
         self.d_v = self.d_k
-
         self.q_proj = Linear(self.d_model, self.num_heads * self.d_k)
         self.k_proj = Linear(self.d_model, self.num_heads * self.d_k)
         self.v_proj = Linear(self.d_model, self.num_heads * self.d_v)
@@ -477,6 +480,7 @@ class CausalMultiHeadSelfAttention(nn.Module):
 
         self.positional_encoder: RotaryEmbedding | None = positional_encoder  # RoPE
 
+    @nvtx.range("attention layer")
     def forward(
         self, x: Float[Tensor, " ... seq d_k"], token_positions: Int[Tensor, " ... seq"] | None = None
     ) -> Float[Tensor, " ... seq d_v"]:
@@ -491,9 +495,10 @@ class CausalMultiHeadSelfAttention(nn.Module):
         *batch_dims, sequence_length, d_model = x.size()
         assert d_model == self.d_model
 
-        Q = self.q_proj(x)
-        K = self.k_proj(x)
-        V = self.v_proj(x)
+        with nvtx.range("QKV projections"):
+            Q = self.q_proj(x)
+            K = self.k_proj(x)
+            V = self.v_proj(x)
 
         # Take apart each head from the embedding dimension of Q, K, V to shape (..., num_heads, seq_len, d_k).
         Q, K, V = (
@@ -501,13 +506,14 @@ class CausalMultiHeadSelfAttention(nn.Module):
             for X in (Q, K, V)
         )  # fmt: skip
 
-        if self.positional_encoder is not None:  # RoPE is enabled
-            if token_positions is not None:  # We got explicit position ids
-                # Duplicate token positions for each head
-                token_positions = rearrange(token_positions, "... seq -> ... 1 seq")
+        with nvtx.range("apply ROPE to QK"):
+            if self.positional_encoder is not None:  # RoPE is enabled
+                if token_positions is not None:  # We got explicit position ids
+                    # Duplicate token positions for each head
+                    token_positions = rearrange(token_positions, "... seq -> ... 1 seq")
 
-            Q = self.positional_encoder(Q, token_positions)
-            K = self.positional_encoder(K, token_positions)
+                Q = self.positional_encoder(Q, token_positions)
+                K = self.positional_encoder(K, token_positions)
 
         # Construct causal mask
         iota = torch.arange(sequence_length, device=x.device)
