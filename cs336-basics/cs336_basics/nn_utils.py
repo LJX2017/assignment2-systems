@@ -1,15 +1,16 @@
 import torch
-import torch.cuda.nvtx as nvtx
+
+# import torch.cuda.nvtx as nvtx
 
 
-@nvtx.range("softmax!")
+# @nvtx.range("softmax!")
 def softmax(x, dim=-1):
     rescaled_input = x - torch.max(x, dim=dim, keepdim=True)[0]
     exponentiated_rescaled_input = torch.exp(rescaled_input)
     return exponentiated_rescaled_input / torch.sum(exponentiated_rescaled_input, dim=dim, keepdim=True)
 
 
-@nvtx.range("log softmax!")
+# @nvtx.range("log softmax!")
 def log_softmax(x, dim=-1):
     x_max = torch.max(x, dim=dim, keepdim=True)[0]
     x = x - x_max

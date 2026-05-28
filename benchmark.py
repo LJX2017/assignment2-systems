@@ -54,6 +54,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--beta1", type=float, default=0.999, help="AdamW beta2")
     parser.add_argument("--eps", type=float, default=1e-8, help="AdamW epsilon")
     parser.add_argument("--weight-decay", type=float, default=0.001, help="AdamW weight decay")
+    parser.add_argument("--profile-torch-memory", type=bool, default=False)
+
     # parser.add_argument("--load-from-checkpoint", type=str, default=None, help="Load from model checkpoint")
     return parser
 
@@ -69,7 +71,8 @@ def sync_cpu_gpu(device):
 
 def forward_only(model: BasicsTransformerLM, input, device):
     sync_cpu_gpu(device)
-    model(input)
+    with torch.no_grad():
+        model(input)
     sync_cpu_gpu(device)
     return
 
@@ -115,6 +118,19 @@ def measure_time(function: Callable, warmup, **params):
             function(**params)
 
 
+from contextlib import contextmanager
+
+
+@contextmanager
+def profile_memory(name):
+    torch.cuda.memory._record_memory_history(max_entries=1000000)
+    try:
+        yield None
+    finally:
+        torch.cuda.memory._dump_snapshot(f"memory_snapshot_{name}.pickle")
+        torch.cuda.memory._record_memory_history(enabled=None)
+
+
 def main():
     args = build_parser().parse_args()
     device = resolve_device(args.device)
@@ -147,19 +163,27 @@ def main():
         context_manager = contextlib.nullcontext()
         if args.use_mixed_precision:
             context_manager = torch.autocast(device_type="cuda", dtype=dtype)
-        if i == 0:
-            torch.cuda.memory._record_memory_history(max_entries=1000000)
         with context_manager:
             forward_only_time = measure_time(forward_only, args.w, model=model, input=input, device=device)
             forward_and_backward_time = measure_time(forward_and_backward, args.w, model=model, input=input, output=output, device=device)
             forward_and_backward_and_optimizer_time = measure_time(
                 forward_and_backward_and_optimizer, args.w, model=model, input=input, output=output, optimizer=optimizer, device=device
             )
+            if args.profile_torch_memory:
+                for _ in range(10):
+                    forward_only(model=model, input=input, device=device)
+                with profile_memory("inference"):
+                    forward_only(model=model, input=input, device=device)
+                for _ in range(10):
+                    forward_and_backward(model=model, input=input, output=output, device=device)
+                with profile_memory("forward_and_backward"):
+                    forward_and_backward(model=model, input=input, output=output, device=device)
 
-        if i == 0:
-            torch.cuda.memory._dump_snapshot("memory_snapshot.pickle")
-            # Stop recording history.
-            torch.cuda.memory._record_memory_history(enabled=None)
+                for _ in range(10):
+                    forward_and_backward_and_optimizer(model=model, input=input, output=output, optimizer=optimizer, device=device)
+                with profile_memory("forward_and_backward_and_optimizer"):
+                    forward_and_backward_and_optimizer(model=model, input=input, output=output, optimizer=optimizer, device=device)
+
         print("forward_only_time: ", forward_only_time)
         print("forward_and_backward_time: ", forward_and_backward_time)
         print("forward_and_backward_and_optimizer_time: ", forward_and_backward_and_optimizer_time)
