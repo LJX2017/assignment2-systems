@@ -30,6 +30,7 @@ image = (
         "tqdm>=4.67",
         "wandb>=0.25",
         "loguru",
+        "pytest>=8",
     )
     .env({"PYTHONPATH": f"{REMOTE_ROOT}:{REMOTE_ROOT / 'cs336-basics'}"})
     .add_local_file(REPO_ROOT / "benchmark.py", remote_path=str(REMOTE_ROOT / "benchmark.py"))
@@ -38,6 +39,8 @@ image = (
     # .add_local_file(REPO_ROOT / "uv.lock", remote_path=str(REMOTE_ROOT / "uv.lock"))
     .add_local_dir(REPO_ROOT / "cs336-basics", remote_path=str(REMOTE_ROOT / "cs336-basics"))
     .add_local_dir(REPO_ROOT / "cs336_systems", remote_path=str(REMOTE_ROOT / "cs336_systems"))
+    .add_local_dir(REPO_ROOT / "tests", remote_path=str(REMOTE_ROOT / "tests"))
+    .add_local_file(REPO_ROOT / "flash_forward.py", remote_path=str(REMOTE_ROOT / "flash_forward.py"))
     .add_local_file(REPO_ROOT / "pytorch_attention.py", remote_path=str(REMOTE_ROOT / "pytorch_attention.py"))
 )
 

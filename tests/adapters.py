@@ -31,7 +31,9 @@ def get_flashattention_autograd_function_triton() -> type:
         A class object (not an instance of the class)
     """
     # For example: return MyTritonFlashAttentionAutogradFunctionClass
-    raise NotImplementedError
+    from flash_forward import Triton_FA
+
+    return Triton_FA
 
 
 def get_ddp(module: torch.nn.Module) -> torch.nn.Module:
