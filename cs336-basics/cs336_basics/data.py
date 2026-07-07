@@ -6,8 +6,9 @@ import torch
 
 
 def get_batch(
-    dataset: npt.NDArray, batch_size: int, context_length: int, device: str
+    dataset: npt.NDArray, batch_size: int, context_length: int, device: str | torch.device
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    device = str(device)
     starting_idxs = torch.randint(len(dataset) - context_length, (batch_size,))
     x = torch.stack([
             torch.from_numpy((dataset[i : i + context_length]).astype(np.int64))

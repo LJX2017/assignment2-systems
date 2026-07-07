@@ -27,13 +27,18 @@ image = (
         "regex>=2026.3.32",
         "tiktoken>=0.12.0",
         "torch~=2.11.0",
+        "triton>=3.6.0",
         "tqdm>=4.67",
         "wandb>=0.25",
         "loguru",
+        "matplotlib",
+        "pandas>=2",
         "pytest>=8",
     )
     .env({"PYTHONPATH": f"{REMOTE_ROOT}:{REMOTE_ROOT / 'cs336-basics'}"})
     .add_local_file(REPO_ROOT / "benchmark.py", remote_path=str(REMOTE_ROOT / "benchmark.py"))
+    .add_local_file(REPO_ROOT / "benchmark ddp.py", remote_path=str(REMOTE_ROOT / "benchmark ddp.py"))
+    .add_local_file(REPO_ROOT / "ddp.py", remote_path=str(REMOTE_ROOT / "ddp.py"))
     .add_local_file(REPO_ROOT / "README.md", remote_path=str(REMOTE_ROOT / "README.md"))
     .add_local_file(REPO_ROOT / "pyproject.toml", remote_path=str(REMOTE_ROOT / "pyproject.toml"))
     # .add_local_file(REPO_ROOT / "uv.lock", remote_path=str(REMOTE_ROOT / "uv.lock"))
@@ -42,12 +47,15 @@ image = (
     .add_local_dir(REPO_ROOT / "tests", remote_path=str(REMOTE_ROOT / "tests"))
     .add_local_file(REPO_ROOT / "flash_forward.py", remote_path=str(REMOTE_ROOT / "flash_forward.py"))
     .add_local_file(REPO_ROOT / "pytorch_attention.py", remote_path=str(REMOTE_ROOT / "pytorch_attention.py"))
+    .add_local_file(REPO_ROOT / "flash_benchmarking.py", remote_path=str(REMOTE_ROOT / "flash_benchmarking.py"))
+    .add_local_file(REPO_ROOT / "distributed_communication.py", remote_path=str(REMOTE_ROOT / "distributed_communication.py"))
 )
 
 
 config = {
-    "gpu": "B200",
+    "gpu": "B200:2",
     "image": image,
+    "timeout": 60 * 60,
 }
 
 
@@ -57,19 +65,41 @@ def benchmark_argv(command: str) -> list[str]:
         parts = parts[3:]
     if parts and Path(parts[0]).name in {"python", "python3"}:
         parts = parts[1:]
-    if not parts or Path(parts[0]).name != "benchmark.py":
+    if not parts or Path(parts[0]).name not in {"benchmark.py", "benchmark ddp.py", "flash_benchmarking.py", "distributed_communication.py"}:
         raise ValueError("Expected a command like: python benchmark.py --device cuda ...")
     return parts
 
 
+def copy_artifacts_to_volume() -> dict[str, bytes]:
+    copied = {}
+    candidates = [
+        *REMOTE_ROOT.glob("memory_snapshot*.pickle"),
+        *REMOTE_ROOT.glob("distributed_communication_results.*"),
+        *REMOTE_ROOT.glob("results/*"),
+    ]
+    for path in candidates:
+        if path.is_file():
+            remote_path = VOLUME_ROOT / path.relative_to(REMOTE_ROOT)
+            remote_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, remote_path)
+            copied[path.relative_to(REMOTE_ROOT).as_posix()] = path.read_bytes()
+    return copied
+
+
 @app.function(volumes={str(VOLUME_ROOT): volume}, **config)
 def run_cmd(command: str):
+    artifacts = {}
     try:
-        subprocess.run(shlex.split(command), cwd=REMOTE_ROOT, check=True)
+        result = subprocess.run(shlex.split(command), cwd=REMOTE_ROOT, text=True, capture_output=True)
+        if result.stdout:
+            print(result.stdout, end="")
+        if result.stderr:
+            print(result.stderr, end="", file=sys.stderr)
+        result.check_returncode()
     finally:
-        for snapshot_path in REMOTE_ROOT.glob("memory_snapshot*.pickle"):
-            shutil.copy2(snapshot_path, VOLUME_ROOT / snapshot_path.name)
+        artifacts = copy_artifacts_to_volume()
         volume.commit()
+    return artifacts
 
 
 @app.function(volumes={str(VOLUME_ROOT): volume}, **config)
@@ -119,4 +149,9 @@ def main(command: str, profile: bool = False, label: str = "benchmark", print_ro
         print(f"trace saved locally at {output_path}")
         print(f"trace saved on volume at {remote_path}")
     else:
-        run_cmd.remote(command)
+        artifacts = run_cmd.remote(command)
+        for relative_path, contents in artifacts.items():
+            output_path = Path.cwd() / relative_path
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(contents)
+            print(f"artifact saved locally at {output_path}")
